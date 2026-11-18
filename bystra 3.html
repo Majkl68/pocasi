@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+
+<title>Teplota Bystrá 2m</title>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+body{
+    margin:0;
+    background:#8d8d8d;
+    font-family:Arial,Helvetica,sans-serif;
+}
+
+.wrapper{
+    position:relative;
+    padding:10px;
+}
+
+h2{
+    margin:0 0 10px 0;
+    color:#111;
+    font-weight:normal;
+}
+
+#info{
+    position:absolute;
+    top:10px;
+    right:20px;
+    z-index:100;
+    background:rgba(255,255,255,.18);
+    padding:12px 15px;
+    border-radius:8px;
+    color:red;
+    font-weight:bold;
+    font-size:17px;
+    text-align:left;
+    min-width:260px;
+    line-height:1.45;
+}
+
+canvas{
+    background:#9b9b9b;
+    border:1px solid #444;
+}
+</style>
+</head>
+
+<body>
+
+<div class="wrapper">
+
+<h2 id="nazevStanice">Načítám stanici...</h2>
+
+<div id="info">
+    <div>LOKALITA: <span id="lokalita">--</span></div>
+    <div>BATERIE: <span id="baterie">--</span> V</div>
+    <br>
+    <div>TMEP MAX: <span id="tmepMax">--</span> °C</div>
+    <div>MAX 21-21: <span id="max">--</span> °C</div>
+    <div>ČAS MAX: <span id="casMax">--</span></div>
+    <br>
+    <div>AKTUÁLNÍ: <span id="aktualni">--</span> °C</div>
+    <br>
+    <div>TMEP MIN: <span id="tmepMin">--</span> °C</div>
+    <div>MIN 21-21: <span id="min">--</span> °C</div>
+    <div>ČAS MIN: <span id="casMin">--</span></div>
+    <br>
+    <div>AMPLITUDA: <span id="amp">--</span> °C</div>
+    <br>
+    <div>AKTUALIZACE:</div>
+    <div id="update">--</div>
+</div>
+
+<canvas id="graf" height="120"></canvas>
+
+</div>
+
+<script>
+// 1. NAČTENÍ ULOŽENÉ HISTORIE GRAFU Z PAMĚTI PROHLÍŽEČE
+const labels = JSON.parse(localStorage.getItem("labels9428")) || [];
+const temperatures = JSON.parse(localStorage.getItem("temperatures9428")) || [];
+
+let minTeplota = parseFloat(localStorage.getItem("minTeplota9428"));
+let maxTeplota = parseFloat(localStorage.getItem("maxTeplota9428"));
+
+let casMin = localStorage.getItem("casMin9428") || "--";
+let casMax = localStorage.getItem("casMax9428") || "--";
+
+let resetDatum = localStorage.getItem("resetDatum9428");
+let posledniResetGrafu = Number(localStorage.getItem("posledniResetGrafu9428")) || Date.now();
+
+// Pomocná funkce pro uložení aktuálních dat grafu
+function ulozHistoriiGrafu(){
+    localStorage.setItem("labels9428", JSON.stringify(labels));
+    localStorage.setItem("temperatures9428", JSON.stringify(temperatures));
+}
+
+// ===============================
+// METEOROLOGICKÝ DEN (21:00 - 21:00)
+// ===============================
+function meteorologickyDen(){
+    const d = new Date();
+    if(d.getHours() < 21){
+        d.setDate(d.getDate() - 1);
+    }
+    return d.getFullYear() + "-" +
+           String(d.getMonth() + 1).padStart(2, "0") + "-" +
+           String(d.getDate()).padStart(2, "0");
+}
+
+function resetMeteorologickehoDne(teplota, cas){
+    const den = meteorologickyDen();
+    if(resetDatum !== den){
+        minTeplota = teplota;
+        maxTeplota = teplota;
+        casMin = cas;
+        casMax = cas;
+        resetDatum = den;
+
+        localStorage.setItem("resetDatum9428", den);
+        localStorage.setItem("minTeplota9428", teplota);
+        localStorage.setItem("maxTeplota9428", teplota);
+        localStorage.setItem("casMin9428", cas);
+        localStorage.setItem("casMax9428", cas);
+    }
+}
+
+// ===============================
+// AUTOMATICKÝ RESET GRAFU PO 24 HODINÁCH
+// ===============================
+function kontrolaResetuGrafu() {
+    const now = Date.now();
+    const denMs = 24 * 60 * 60 * 1000;
+
+    if (now - posledniResetGrafu >= denMs) {
+        labels.length = 0;
+        temperatures.length = 0;
+        posledniResetGrafu = now;
+        localStorage.setItem("posledniResetGrafu9428", now);
+        ulozHistoriiGrafu();
+    }
+}
+
+// ===============================
+// INICIALIZACE GRAFU
+// ===============================
+const chart = new Chart(
+    document.getElementById("graf"),
+    {
+        type: "line",
+        data: {
+            labels: labels,
+            datasets: [
+                {
+                    label: "Teplota",
+                    data: temperatures,
+                    yAxisID: "y1",
+                    borderColor: "#ff0000",
+                    backgroundColor: "rgba(255,0,0,0.15)",
+                    fill: true,
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    tension: 0.15
+                },
+                {
+                    label: "Minimum",
+                    data: [],
+                    showLine: false,
+                    pointRadius: 8,
+                    backgroundColor: "#0066ff",
+                    borderColor: "#0066ff",
+                    yAxisID: "y"
+                },
+                {
+                    label: "Maximum",
+                    data: [],
+                    showLine: false,
+                    pointRadius: 8,
+                    backgroundColor: "#ff9900",
+                    borderColor: "#ff9900",
+                    yAxisID: "y"
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: {
+                    position: "bottom",
+                    labels: { color: "red" }
+                }
+            },
+            interaction: {
+                intersect: false,
+                mode: "index"
+            },
+            scales: {
+                x: {
+                    ticks: { color: "#111" },
+                    grid: { color: "#444", borderDash: [3, 3] }
+                },
+                y: {
+                    position: "left",
+                    min: -25,
+                    max: 25,
+                    ticks: {
+                        color: "red",
+                        callback: (v) => v + "°"
+                    },
+                    grid: {
+                        color: (ctx) => ctx.tick.value === 0 ? "#00aaff" : "#555",
+                        borderDash: [3, 3]
+                    }
+                },
+                y1: {
+                    position: "right",
+                    min: -25,
+                    max: 25,
+                    ticks: {
+                        color: "red",
+                        callback: (v) => v + "°"
+                    },
+                    grid: { drawOnChartArea: false }
+                }
+            }
+        }
+    }
+);
+
+// Funkce pro aktualizaci bodů Min/Max a překreslení grafu
+function aktualizujGraf() {
+    if (temperatures.length > 0) {
+        const minVal = Math.min(...temperatures);
+        const maxVal = Math.max(...temperatures);
+
+        const indexMin = temperatures.indexOf(minVal);
+        const indexMax = temperatures.indexOf(maxVal);
+
+        chart.data.datasets[1].data = temperatures.map((v, i) => i === indexMin ? v : null);
+        chart.data.datasets[2].data = temperatures.map((v, i) => i === indexMax ? v : null);
+    } else {
+        chart.data.datasets[1].data = [];
+        chart.data.datasets[2].data = [];
+    }
+    chart.update();
+}
+
+// Ihned vykreslit uložená data po otevření stránky (ještě před stažením nových dat)
+aktualizujGraf();
+
+// ===============================
+// NAČÍTÁNÍ DAT ZE STANICE
+// ===============================
+async function nactiData(){
+    try{
+        kontrolaResetuGrafu();
+
+        const response = await fetch(
+            "https://tmep.cz/vystup-json.php?id=9428&export_key=3gkfpibt80&extended=1"
+        );
+        const data = await response.json();
+
+        document.getElementById("nazevStanice").innerText = data.nadpis || "Teplota Bystrá 2m";
+        document.getElementById("lokalita").innerText = data.umisteni || "-";
+        document.getElementById("baterie").innerText = Number(data.napeti).toFixed(2);
+
+        const teplota = Number(data.teplota);
+        const cas = data.cas;
+        const tmepMin = Number(data.nejnizsiTeplota);
+        const tmepMax = Number(data.nejvyssiTeplota);
+
+        resetMeteorologickehoDne(teplota, cas);
+
+        if(isNaN(minTeplota)){ minTeplota = teplota; casMin = cas; }
+        if(isNaN(maxTeplota)){ maxTeplota = teplota; casMax = cas; }
+
+        if(teplota < minTeplota){ minTeplota = teplota; casMin = cas; }
+        if(teplota > maxTeplota){ maxTeplota = teplota; casMax = cas; }
+
+        localStorage.setItem("minTeplota9428", minTeplota);
+        localStorage.setItem("maxTeplota9428", maxTeplota);
+        localStorage.setItem("casMin9428", casMin);
+        localStorage.setItem("casMax9428", casMax);
+
+        document.getElementById("aktualni").innerText = teplota.toFixed(1);
+        document.getElementById("min").innerText = minTeplota.toFixed(1);
+        document.getElementById("max").innerText = maxTeplota.toFixed(1);
+        document.getElementById("tmepMin").innerText = tmepMin.toFixed(1);
+        document.getElementById("tmepMax").innerText = tmepMax.toFixed(1);
+        document.getElementById("casMin").innerText = casMin;
+        document.getElementById("casMax").innerText = casMax;
+        document.getElementById("amp").innerText = (maxTeplota - minTeplota).toFixed(1);
+        document.getElementById("update").innerText = cas;
+
+        labels.push(
+            new Date().toLocaleTimeString("cs-CZ", { hour: "2-digit", minute: "2-digit" })
+        );
+        temperatures.push(teplota);
+
+        if(labels.length > 288){
+            labels.shift();
+            temperatures.shift();
+        }
+
+        // 2. ULOŽENÍ NOVÉHO BODU DO PAMĚTI PROHLÍŽEČE
+        ulozHistoriiGrafu();
+
+        aktualizujGraf();
+
+        document.title = teplota.toFixed(1) + " °C | " + (data.nadpis || "Teplota Bystrá 2m");
+    }
+    catch(err){
+        console.error(err);
+    }
+}
+
+nactiData();
+setInterval(nactiData, 60000);
+</script>
+
+</body>
+</html>

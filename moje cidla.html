@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TMEP – stanice + grafy</title>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+body{
+    background:#e0e0e0;
+    font-family:Arial,Helvetica,sans-serif;
+    margin:0;
+    padding:20px;
+}
+table{
+    width:100%;
+    border-collapse:collapse;
+    background:white;
+}
+th, td{
+    border:1px solid #999;
+    padding:10px;
+    text-align:center;
+}
+th{
+    background:#444;
+    color:white;
+}
+.sensor-name{
+    font-weight:bold;
+    font-size:18px;
+    cursor:pointer;
+}
+.sensor-name:hover{
+    text-decoration:underline;
+}
+.temp{
+    font-size:22px;
+    font-weight:bold;
+}
+.min-temp{
+    color:#0066cc;
+    font-weight:bold;
+}
+.max-temp{
+    color:#cc0000;
+    font-weight:bold;
+}
+.cold{ color:#0077ff; }
+.hot{ color:#d40000; }
+
+#detail{
+    position:fixed;
+    top:50%;
+    left:50%;
+    transform:translate(-50%,-50%);
+    background:white;
+    padding:20px;
+    border-radius:10px;
+    box-shadow:0 0 20px rgba(0,0,0,0.4);
+    display:none;
+    min-width:350px;
+    max-width:90%;
+}
+#detail h3{ margin-top:0; }
+#close{
+    background:#d40000;
+    color:white;
+    padding:8px 12px;
+    border:none;
+    border-radius:5px;
+    cursor:pointer;
+    margin-top:10px;
+}
+canvas{
+    width:100% !important;
+    height:300px !important;
+}
+#buttons{
+    margin-bottom:10px;
+}
+#buttons button{
+    padding:6px 12px;
+    margin-right:5px;
+    cursor:pointer;
+}
+</style>
+</head>
+
+<body>
+
+<h2>Přehled všech čidel (klikni → graf 24h/7d/30d)</h2>
+
+<table>
+<thead id="hlavicka"></thead>
+<tbody id="tabulka"></tbody>
+</table>
+
+<!-- Detailní panel -->
+<div id="detail">
+    <h3 id="detail-nazev"></h3>
+
+    <p><i>Hodnota větru je zobrazena z původního parametru tlaku (jednotka mph).</i></p>
+
+    <div id="buttons">
+        <button onclick="nactiGraf(24)">24 hodin</button>
+        <button onclick="nactiGraf(168)">7 dní</button>
+        <button onclick="nactiGraf(720)">30 dní</button>
+    </div>
+
+    <canvas id="graf"></canvas>
+    <button id="close">Zavřít</button>
+</div>
+
+<script>
+const BASE = "https://tmep.cz/vystup-json.php?id=9481&export_key=ce4SPDLwBsMHhkand3uborpQVqWG7tUZ&extended=1&all=1";
+let chart = null;
+let aktivniID = null;
+
+async function nacti(){
+    const r = await fetch(BASE);
+    const data = await r.json();
+
+    const arr = Object.entries(data).map(([id, c]) => ({ id, ...c }));
+    arr.sort((a,b) => (b.teplota ?? -999) - (a.teplota ?? -999));
+
+    // Zjistí, zda alespoň jedna stanice má platnou hodnotu (není null ani 0) pro volitelné sloupce
+    const maVlhkost = arr.some(c => c.vlhkost !== null && c.vlhkost !== undefined && Number(c.vlhkost) > 0);
+    const maVitr = arr.some(c => c.tlak !== null && c.tlak !== undefined && (Number(c.tlak) > 0 || Number(c.nejvyssiTlak) > 0));
+    const maBaterii = arr.some(c => c.napeti !== null && c.napeti !== undefined && Number(c.napeti) > 0);
+
+    // Dynamicky sestaví hlavičku tabulky (prázdné sloupce se vůbec nevykreslí)
+    const thead = document.getElementById("hlavicka");
+    thead.innerHTML = `
+        <tr>
+            <th>Název stanice</th>
+            <th>Teplota</th>
+            <th>Min (den)</th>
+            <th>Max (den)</th>
+            ${maVlhkost ? "<th>Vlhkost</th>" : ""}
+            ${maVitr ? "<th>Vítr (mph)</th>" : ""}
+            ${maBaterii ? "<th>Baterie</th>" : ""}
+            <th>Aktualizace</th>
+        </tr>
+    `;
+
+    const tbody = document.getElementById("tabulka");
+    tbody.innerHTML = "";
+
+    for(const c of arr){
+        let tempClass = "";
+        if(c.teplota <= 0) tempClass = "cold";
+        if(c.teplota >= 25) tempClass = "hot";
+
+        // Ošetření nulových/prázdných hodnot u stanic bez čidla vlhkosti nebo větru
+        const vlhkostText = (c.vlhkost !== null && Number(c.vlhkost) > 0) ? `${c.vlhkost} %` : "--";
+        const vitrText = (c.tlak !== null && (Number(c.tlak) > 0 || Number(c.nejvyssiTlak) > 0)) ? `${c.tlak} mph` : "--";
+        const baterieText = (c.napeti !== null && Number(c.napeti) > 0) ? `${c.napeti} V` : "--";
+
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+            <td class="sensor-name" onclick="otevriDetail('${c.id}', '${c.nadpis ?? ("Stanice "+c.id)}')">
+                ${c.nadpis ?? ("Stanice "+c.id)}
+            </td>
+            <td class="temp ${tempClass}">${c.teplota ?? "--"} °C</td>
+            <td class="min-temp">${c.nejnizsiTeplota ?? "--"} °C</td>
+            <td class="max-temp">${c.nejvyssiTeplota ?? "--"} °C</td>
+            ${maVlhkost ? `<td>${vlhkostText}</td>` : ""}
+            ${maVitr ? `<td>${vitrText}</td>` : ""}
+            ${maBaterii ? `<td>${baterieText}</td>` : ""}
+            <td>${c.cas}</td>
+        `;
+        tbody.appendChild(tr);
+    }
+}
+
+function otevriDetail(id, nazev){
+    aktivniID = id;
+    document.getElementById("detail-nazev").innerText = nazev;
+    document.getElementById("detail").style.display = "block";
+    nactiGraf(24);
+}
+
+async function nactiGraf(hodiny){
+    const url = `https://tmep.cz/vystup-json.php?id=${aktivniID}&export_key=ce4SPDLwBsMHhkand3uborpQVqWG7tUZ&history=1&hours=${hodiny}`;
+    const r = await fetch(url);
+    const data = await r.json();
+
+    const labels = data.map(x => x.cas);
+    const temps = data.map(x => Number(x.teplota));
+
+    if(chart) chart.destroy();
+
+    const ctx = document.getElementById("graf").getContext("2d");
+    chart = new Chart(ctx, {
+        type: "line",
+        data: {
+            labels: labels,
+            datasets: [{
+                label: "Teplota (°C)",
+                data: temps,
+                borderColor: "#d40000",
+                backgroundColor: "rgba(212,0,0,0.2)",
+                tension: 0.2
+            }]
+        },
+        options: {
+            scales: {
+                x: { ticks: { maxRotation: 90, minRotation: 45 } },
+                y: { beginAtZero: false }
+            }
+        }
+    });
+}
+
+document.getElementById("close").onclick = () => {
+    document.getElementById("detail").style.display = "none";
+};
+
+nacti();
+setInterval(nacti, 60000);
+</script>
+
+</body>
+</html>

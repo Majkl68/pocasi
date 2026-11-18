@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+
+<title>Teplota – posledních 36 hodin</title>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+body{
+    margin:0;
+    background:#8d8d8d;
+    font-family:Arial,Helvetica,sans-serif;
+}
+.wrapper{
+    padding:10px;
+}
+#info{
+    position:absolute;
+    top:10px;
+    right:20px;
+    background:rgba(255,255,255,.18);
+    padding:12px 15px;
+    border-radius:8px;
+    color:red;
+    font-weight:bold;
+    font-size:17px;
+    min-width:260px;
+}
+canvas{
+    background:#9b9b9b;
+    border:1px solid #444;
+}
+</style>
+</head>
+
+<body>
+
+<div class="wrapper">
+
+<h2 id="nazev">Načítám...</h2>
+
+<div id="info">
+    <div>LOKALITA: <span id="lokalita">--</span></div>
+    <div>BATERIE: <span id="baterie">--</span> V</div>
+    <br>
+    <div>TMEP MAX: <span id="tmepMax">--</span> °C</div>
+    <div>MAX 21–21: <span id="max">--</span> °C</div>
+    <div>ČAS MAX: <span id="casMax">--</span></div>
+    <br>
+    <div>AKTUÁLNÍ: <span id="aktualni">--</span> °C</div>
+    <br>
+    <div>TMEP MIN: <span id="tmepMin">--</span> °C</div>
+    <div>MIN 21–21: <span id="min">--</span> °C</div>
+    <div>ČAS MIN: <span id="casMin">--</span></div>
+    <br>
+    <div>AMPLITUDA: <span id="amp">--</span> °C</div>
+    <br>
+    <div>AKTUALIZACE:</div>
+    <div id="update">--</div>
+</div>
+
+<canvas id="graf" height="120"></canvas>
+
+</div>
+
+<script>
+// =====================================
+// 36h osa – 216 bodů po 10 minutách
+// =====================================
+function vytvorOsa36h() {
+    const arr = [];
+    const now = new Date();
+
+    for (let i = 215; i >= 0; i--) {
+        const t = new Date(now.getTime() - i * 10 * 60000);
+        const datum = t.toISOString().split("T")[0];
+        const cas = t.toTimeString().slice(0,5);
+        arr.push(datum + " " + cas);
+    }
+    return arr;
+}
+
+let labels = vytvorOsa36h();
+let temps = JSON.parse(localStorage.getItem("temps36h")) || Array(216).fill(null);
+
+// =====================================
+// Meteorologický den 21–21
+// =====================================
+let minT = parseFloat(localStorage.getItem("minT36h"));
+let maxT = parseFloat(localStorage.getItem("maxT36h"));
+let casMin = localStorage.getItem("casMin36h") || "--";
+let casMax = localStorage.getItem("casMax36h") || "--";
+
+function meteoDen(){
+    const d = new Date();
+    if(d.getHours() < 21) d.setDate(d.getDate() - 1);
+    return d.toISOString().split("T")[0];
+}
+
+// =====================================
+// Plugin – vertikální čára
+// =====================================
+const vertikalniCaraPlugin = {
+    id: 'vertikalniCara',
+    afterDraw(chart, args, options) {
+        const { ctx, chartArea: { left, right, top, bottom }, scales: { x } } = chart;
+
+        const index = options.index;
+        if (index < 0) return;
+
+        const xPos = x.getPixelForValue(index);
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(xPos, top);
+        ctx.lineTo(xPos, bottom);
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+        ctx.stroke();
+
+        ctx.fillStyle = 'black';
+        ctx.font = '14px Arial';
+        ctx.fillText('21:00', xPos + 5, top + 15);
+
+        ctx.restore();
+    }
+};
+
+// =====================================
+// Graf
+// =====================================
+const chart = new Chart(document.getElementById("graf"), {
+    type:"line",
+    plugins:[vertikalniCaraPlugin],
+    data:{
+        labels: labels,
+        datasets:[
+            {
+                label:"Teplota",
+                data: temps,
+                borderColor:"#ff0000",
+                backgroundColor:"rgba(255,0,0,0.2)",
+                fill:true,
+                tension:0.15,
+                pointRadius:0
+            }
+        ]
+    },
+    options:{
+        plugins:{ 
+            legend:{ labels:{ color:"red" } },
+            vertikalniCara:{ index: 0 }
+        },
+        scales:{
+            x:{
+                ticks:{
+                    color:"#111",
+                    callback: function(value, index){
+                        if(index % 12 === 0){
+                            return this.getLabelForValue(value);
+                        }
+                        return "";
+                    }
+                },
+                grid:{ color:"#444" }
+            },
+            y:{
+                min:-25,
+                max:25,
+                ticks:{ color:"red" }
+            }
+        }
+    }
+});
+
+// =====================================
+// Načtení dat + aktualizace grafu
+// =====================================
+async function nacti(){
+    try{
+        const r = await fetch("https://tmep.cz/vystup-json.php?id=9909&export_key=i71tx52p49&extended=1");
+        const d = await r.json();
+
+        const t = Number(d.teplota);
+        const cas = d.cas;
+
+        document.getElementById("nazev").innerText = d.nadpis;
+        document.getElementById("lokalita").innerText = d.umisteni;
+        document.getElementById("baterie").innerText = Number(d.napeti).toFixed(2);
+
+        // POSUVNÝ 36h BUFFER
+        temps.push(t);
+        temps.shift();
+
+        labels = vytvorOsa36h();
+        chart.data.labels = labels;
+        chart.data.datasets[0].data = temps;
+
+        // MIN/MAX pro meteorologický den
+        const den = meteoDen();
+
+        const denniData = temps
+            .map((v, i) => ({ t: v, cas: labels[i] }))
+            .filter(obj => obj.t !== null && obj.cas.startsWith(den));
+
+        if (denniData.length > 0) {
+            minT = Math.min(...denniData.map(o => o.t));
+            maxT = Math.max(...denniData.map(o => o.t));
+
+            casMin = denniData.find(o => o.t === minT).cas;
+            casMax = denniData.find(o => o.t === maxT).cas;
+
+            localStorage.setItem("minT36h", minT);
+            localStorage.setItem("maxT36h", maxT);
+            localStorage.setItem("casMin36h", casMin);
+            localStorage.setItem("casMax36h", casMax);
+        }
+
+        // VERTIKÁLNÍ ČÁRA – najdeme index 21:00
+        const indexZacatekDne = labels.findIndex(l => l.endsWith("21:00"));
+        chart.options.plugins.vertikalniCara.index = indexZacatekDne;
+
+        chart.update();
+
+        // Zobrazení hodnot
+        document.getElementById("aktualni").innerText = t.toFixed(1);
+        document.getElementById("min").innerText = minT.toFixed(1);
+        document.getElementById("max").innerText = maxT.toFixed(1);
+        document.getElementById("tmepMin").innerText = Number(d.nejnizsiTeplota).toFixed(1);
+        document.getElementById("tmepMax").innerText = Number(d.nejvyssiTeplota).toFixed(1);
+        document.getElementById("casMin").innerText = casMin;
+        document.getElementById("casMax").innerText = casMax;
+        document.getElementById("amp").innerText = (maxT - minT).toFixed(1);
+        document.getElementById("update").innerText = cas;
+
+        localStorage.setItem("temps36h", JSON.stringify(temps));
+
+        document.title = t.toFixed(1) + " °C | " + d.nadpis;
+    }
+    catch(e){
+        console.error(e);
+    }
+}
+
+nacti();
+setInterval(nacti, 60000);
+</script>
+
+</body>
+</html>
